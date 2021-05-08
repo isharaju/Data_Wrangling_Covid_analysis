@@ -1,0 +1,718 @@
+---
+title: "Data Wrangling - Project"
+author: "Isha Raju"
+date: "4/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Overview
+The following file has two parts:
+
+1. Data scraping and wrangling of COVID data from web pages
+As discussed during the presentation the web scraping took up a lot of time to get few data columns. To get more data for better analysis I would have required to scrape a lot more web pages. As I wanted to apply the visualizations learnt in class I decided to go ahead with readily available data.
+   
+2. Data wrangling and visualization of readily available COVID vaccine data from Kaggle
+
+# Setting up all the libraries
+```{r }
+library(tidyverse)
+library(tidyr)
+library(rvest)
+library(broom)
+library(Hmisc)
+library(ggrepel)
+library(jsonlite)
+library(reshape2)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(choroplethr)
+library(choroplethrMaps)
+library(countrycode) 
+library(rworldmap)
+
+```
+
+#  Part 1 : Data scraping and data wrangling
+
+##  1.1 Scraping cumulative COVID pandemic death data from 2020
+##  1.2 Scraping cumulative COVID pandemic death data from 2021
+```{r }
+
+#----------------------------------------------------------------------------------------------------------------------------------
+# Death data for 2020
+#----------------------------------------------------------------------------------------------------------------------------------
+url = "https://en.wikipedia.org/wiki/COVID-19_pandemic_deaths"
+covid_all_2020 = url %>%
+           read_html() %>%
+           html_nodes("table") %>% 
+           html_table(fill = TRUE) 
+
+covid_all_2020 = as_tibble(covid_all_2020[[2]]) %>%
+                rename("Region" = "2020") %>%
+                filter(Region != "Days to double" & Region != "World" & Region != "" & Region != "Countries and territories" ) %>%
+                select (-c("First death", "Last death")) %>%
+                mutate(Region =str_to_lower(Region)) %>%
+                mutate(Jan = as.character(Jan)) %>%
+                mutate(Feb = as.character(Feb))
+              
+              
+head(covid_all_2020)
+
+#----------------------------------------------------------------------------------------------------------------------------------
+# Death data for 2021
+#----------------------------------------------------------------------------------------------------------------------------------
+
+url = "https://en.wikipedia.org/wiki/COVID-19_pandemic_deaths"
+covid_all_2021 = url %>%
+           read_html() %>%
+           html_nodes("table") %>% 
+           html_table(fill = TRUE) 
+  
+covid_all_2021 = as_tibble(covid_all_2021[[3]]) %>%
+                rename("Region" = "Date") %>%
+                filter(Region != "Days to double" & Region != "World" & Region != "" & Region != "Countries and territories" ) %>%
+                select (-c("First case")) %>%
+                mutate(Region =str_to_lower(Region))
+              
+head(covid_all_2021)
+
+#----------------------------------------------------------------------------------------------------------------------------------
+# Death data for 2020 and 2021 combined
+#----------------------------------------------------------------------------------------------------------------------------------
+
+covid_all_2020_2021 = covid_all_2020 %>%
+                      inner_join(covid_all_2021, by = "Region")
+
+head(covid_all_2020_2021)
+```
+
+# 1.3 Joining the above two tibbles to get deaths from 2020 and 2021.
+#     Dropping 12 regions for which either 2020 data was unavailable or 2021 data was unavailable.
+#     Printing these regions so that we know which of these were dropped.
+```{r }
+
+dim(covid_all_2020)
+dim(covid_all_2021)
+dim(covid_all_2020_2021)
+```
+
+```{r }
+covid_all_in_2020_not_in_2021 = covid_all_2020 %>%
+                                anti_join(covid_all_2021, by = "Region")
+covid_all_in_2020_not_in_2021
+```
+
+```{r }
+covid_all_not_in_2020_in_2021 = covid_all_2021 %>%
+                                anti_join(covid_all_2020, by = "Region")
+covid_all_not_in_2020_in_2021
+```
+
+# 1.4  Scraping data for the december month in year 2020.
+```{r }
+url = "https://en.wikipedia.org/wiki/COVID-19_pandemic_deaths_in_December_2020"
+
+#----------------------------------------------------------------------------------------------------------------------------------
+# First half : Dec1 - Dec15
+#----------------------------------------------------------------------------------------------------------------------------------
+covid_dec_2020_firsthalf = url %>%
+           read_html() %>%
+           html_nodes("table") %>% 
+           html_table(fill = TRUE) 
+  
+covid_dec_2020_firsthalf = as_tibble(covid_dec_2020_firsthalf[[3]]) %>%
+                rename("Region" = "Date") %>%
+                filter(Region != "Days to double" & Region != "World" & Region != "" & Region != "Countries and territories" ) %>%
+                mutate(Region =str_to_lower(Region))
+              
+
+head(covid_dec_2020_firsthalf)
+#----------------------------------------------------------------------------------------------------------------------------------
+# Second half : Dec16 - Dec31
+#----------------------------------------------------------------------------------------------------------------------------------
+covid_dec_2020_secondhalf = url %>%
+           read_html() %>%
+           html_nodes("table") %>% 
+           html_table(fill = TRUE) 
+  
+covid_dec_2020_secondhalf = as_tibble(covid_dec_2020_secondhalf[[5]]) %>%
+                rename("Region" = "Date") %>%
+                filter(Region != "Days to double" & Region != "World" & Region != "" & Region != "Countries and territories" ) %>%
+                mutate(Region =str_to_lower(Region))
+              
+
+head(covid_dec_2020_secondhalf)
+
+#----------------------------------------------------------------------------------------------------------------------------------
+# Entire December 1-31
+#----------------------------------------------------------------------------------------------------------------------------------
+covid_dec_2020  = covid_dec_2020_firsthalf %>%
+                  inner_join(covid_dec_2020_secondhalf, by = "Region")
+
+
+head(covid_dec_2020)
+```
+
+# 1.5  December data merged with 2020 and 2021 yearly data.
+```{r }
+covid_all_dec_detailed  = covid_all_2020_2021 %>%
+                          inner_join(covid_dec_2020, by = "Region")
+
+head(covid_all_dec_detailed)
+```
+# 1.6 Make the data longer process data so that there is a unique record for a particular country, year, month and day
+```{r }
+covid_all_dec_detailed_long = covid_all_dec_detailed %>%
+                              pivot_longer(!Region, names_to = "Months", values_to = "count") %>%
+                              separate(Months, into = c("Month", "Day"), convert =TRUE) %>%
+                              mutate(Day = as.character(replace_na(Day, 0))) %>%
+                              mutate(Year = ifelse(Day == "0" | Month == "Dec", "2020", "2021"))  %>%
+                              mutate(Day, Day = ifelse(Day == "0", "1", Day)) %>%
+                              mutate(Month_num = match(Month,month.abb)) %>%
+                              mutate(Year = as.numeric(Year)) %>%
+                              mutate(Day = as.numeric(Day)) %>%
+                              mutate(Date = make_datetime(year = as.numeric(Year), month = Month_num, day = as.numeric(Day))) %>%
+                              mutate(count = as.numeric(gsub(",","",count))) %>%
+                              group_by(Region, Year, Month_num, Date) %>% 
+                              filter(row_number(count) == 1) %>%
+                              select( c(Region, Date, count, Year, Month_num, Day)) 
+                              
+covid_all_dec_detailed_long
+```
+# 1.7 Get the information for continent and the following from the csv in the below url. Keep only continent information at the end.
+  Continent_Name,
+  Continent_Code,
+  Country_Name,
+  Two_Letter_Country_Code,
+  Three_Letter_Country_Code,
+  Country_Number
+```{r }
+
+continents = read_csv("https://pkgstore.datahub.io/JohnSnowLabs/country-and-continent-codes-list/country-and-continent-codes-list-csv_csv/data/b7876b7f496677669644f3d1069d3121/country-and-continent-codes-list-csv_csv.csv")
+
+continents = continents %>%
+             mutate(Continent_Name =str_to_lower(Continent_Name)) %>%
+             separate(Country_Name, into = c("Region", "Region_2"), convert =TRUE) %>%
+             mutate(Region =str_to_lower(Region)) %>%
+             select(c(Continent_Name, Region))
+continents
+
+hardcoded_continents = read_csv("hardcoded_continents.csv")
+
+hardcoded_continents
+
+country_continent = covid_all_dec_detailed_long %>%
+                    left_join(hardcoded_continents, by = "Region") %>%
+                    left_join(continents, by = "Region") %>%
+                    replace_na(list(Continent_Name.x = "NA") ) %>%
+                    replace_na(list(Continent_Name.y = "NA") ) %>%
+                    mutate( Continent = ifelse(Continent_Name.x  == "NA", Continent_Name.y , Continent_Name.x )) %>%
+                    mutate( Continent = ifelse(Continent  == "oceania", "australia", Continent )) %>%
+                    filter(Continent != "other") %>% 
+                    filter(Year == 2020 | (Year == 2020 & Month_num ==12 & Day >1)) %>% 
+                    filter(!(Month_num ==12 & Day >1)) %>% 
+                    select(c(Continent, Region, Date, count, Year, Month_num, Day)) %>%
+                    arrange(Continent, Region)
+country_continent
+```
+
+```{r }
+country_continent %>% 
+  group_by(Continent,Region) %>% 
+  summarise(count=n()) 
+```
+
+```{r }
+country_continent %>% 
+  group_by(Continent) %>% 
+  summarise(count=n()) 
+```
+
+```{r }
+country_continent %>% 
+  group_by(Region) %>% 
+  summarise(count=n()) 
+```
+```{r }
+country_continent
+```
+
+```{r }
+country_continent_dec = covid_all_dec_detailed_long %>%
+                    left_join(hardcoded_continents, by = "Region") %>%
+                    left_join(continents, by = "Region") %>%
+                    replace_na(list(Continent_Name.x = "NA") ) %>%
+                    replace_na(list(Continent_Name.y = "NA") ) %>%
+                    mutate( Continent = ifelse(Continent_Name.x  == "NA", Continent_Name.y , Continent_Name.x )) %>%
+                    mutate( Continent = ifelse(Continent  == "oceania", "australia", Continent )) %>%
+                    filter(Continent != "other") %>% 
+                    filter(Year == 2020 & Month_num == 12 & Day > 1) %>% 
+                    select(c(Continent, Region, Date, count, Year, Month_num, Day)) %>%
+                    arrange(Continent, Region)
+country_continent_dec
+```
+
+
+
+
+
+# Part 2 : 
+
+## 2.1 Vaccine Data description
+The data contains the following information:
+
+Country                           : this is the country for which the vaccination information is provided;
+
+Country ISO Code                  : ISO code for the country;
+
+Date                              : date for the data entry; for some of the dates we have only the daily vaccinations, for                                        others,only the (cumulative) total;
+
+Total number of vaccinations      : this is the absolute number of total immunizations in the country;
+
+Total number of people vaccinated : a person, depending on the immunization scheme, will receive one or more (typically 2)                                         vaccines; at a certain moment, the number of vaccination might be larger than the number of                                     people;
+
+Total number of people fully vaccinated : this is the number of people that received the entire set of immunization according                                      to the immunization scheme (typically 2); at a certain moment in time, there might be a                                        certain number of people that received one vaccine and another number (smaller) of people                                      that received all vaccines in the scheme;
+
+Daily vaccinations (raw)          : for a certain date entry, the number of vaccination for that date/country;
+Daily vaccinations                : for a certain date entry, the number of vaccination for that date/country;
+
+Total vaccinations per hundred    : ratio (in percent) between vaccination number and total population up to the date in the                                       country;
+
+Total number of people vaccinated per hundred : ratio (in percent) between population immunized and total population up                                            to the date in the country;
+
+Total number of people fully vaccinated per hundred : ratio (in percent) between population fully immunized and total                                              population up to the date in the country;
+
+Number of vaccinations per day     : number of daily vaccination for that day and country;
+Daily vaccinations per million     : ratio (in ppm) between vaccination number and total population for the current date in the                                      country;
+
+Vaccines used in the country       : total number of vaccines used in the country (up to date);
+Source name                        : source of the information (national authority, international organization, local                                               organization etc.);
+
+Source website                     : website of the source of information;
+
+Data got from https://www.kaggle.com/gpreda/covid-world-vaccination-progress
+
+# 2.2 Read the csv file and see last 6 observations.
+```{r }
+data <- read.csv("country_vaccinations.csv")
+head (data)
+tail (data)
+```
+# 2.3 look at the dimension of the data
+```{r }
+dim(data)
+```
+# 2.4 Keep only relevant columns
+```{r }
+data = data %>% 
+            select(c("country", 
+            "iso_code", 
+            "date", 
+            "total_vaccinations", 
+            "people_vaccinated", 
+            "people_fully_vaccinated", 
+            "daily_vaccinations_raw",
+            "daily_vaccinations",
+            "total_vaccinations_per_hundred",
+            "people_vaccinated_per_hundred",
+            "people_fully_vaccinated_per_hundred",
+            "daily_vaccinations_per_million",
+            "vaccines"))
+tail(data)
+```
+# 2.5 Find Number of NA's in each column
+```{r }
+data.frame("Number_of_NA" = colSums(is.na(data))) 
+```
+# 2.6 Imputing missing values with 0 
+```{r }
+data[is.na(data)] = 0
+```
+
+```{r }
+# Number of NA's in each column after imputation
+data.frame("Number_of_NA" = colSums(is.na(data))) 
+```
+
+# 2.7 Number of countries for which the data is present
+```{r }
+paste("Number of countries : ", length(unique(data$country)))
+```
+
+# 2.8 Unique values of vaccine column is printed below. Each row consists of a list of different vaccines.
+```{r }
+
+vaccine = unique(data$vaccines)
+vaccine
+```
+# 2.9 In the below code I am finding unique vaccines used amongst all countries. This will be useful in visualizing in the future plots.
+#     Eleven unique vaccines were found.
+```{r }
+# Split string of vaccine names 
+data$vaccines = str_replace_all(data$vaccines, " ","")
+vaccine_val = unique(data$vaccines)
+vaccine = vector()
+for (i in vaccine_val){
+    for (j in strsplit(i, ",")){
+        vaccine = c(vaccine, j)
+    }
+ }
+vaccine_used = unique(vaccine)
+vaccine_used
+```
+
+```{r }
+# Inspect the usage of vaccine used wordwide
+
+vaccine_data <- data.frame(matrix(ncol = length(vaccine_used), 
+                                  nrow = 0))
+for (i in data$vaccines){
+  vaccine_data<- rbind(vaccine_data, 
+                       Vectorize(grepl, 
+                                 USE.NAMES = TRUE)(vaccine_used, 
+                                                   str_replace_all(i," ","")
+                                )
+                       )
+}
+vaccine_data[vaccine_data == TRUE]  = 1
+vaccine_data[vaccine_data == FALSE] = 0
+colnames(vaccine_data) <- paste0(unique(vaccine))
+```
+# 2.10 Agrregating the number of vaccines administered by "Vaccine name"
+```{r }
+vaccine_sum = vaccine_data   %>%
+              summarise_all(sum) 
+vaccine_sum
+```
+
+```{r }
+vaccine_per = vaccine_sum %>%
+              summarise_all(sum) %>%
+              gather(key ="Vaccine_name", value = "Vaccine_count") %>%
+              mutate (Vaccine_percent = round( Vaccine_count / sum(Vaccine_count), 4)) 
+vaccine_per
+```
+# 2.11 Of all the vaccines administered in the world, Astrazenica seems to be the most administered vaccine(approx 33%) followed by Pfizer(approx 30%) and Moderna(approx 14%)
+
+```{r }
+vaccine_per %>%
+ggplot(mapping = aes(x     = reorder(Vaccine_name, -Vaccine_percent), 
+                     y     = Vaccine_percent)) +
+geom_col() +
+labs(x      = "Vaccine names", 
+     y      = "Percentage", 
+     title  = "Percentage of vaccines") +
+
+geom_text(aes(label = paste(Vaccine_percent*100, "%" )), 
+              vjust = -0.5) +
+theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "None")
+```
+
+
+# 2.12 Number of countries using these vaccines by vaccine names
+```{r }
+vaccine_in_countries = vaccine_data %>%
+                       mutate(country = data$country) %>%
+                       group_by(country) %>%
+                       summarise_all(sum)
+
+#vaccine_in_countries
+head(vaccine_in_countries)
+```
+# 2.13 Number of countries using these vaccines
+```{r }
+No_of_countries = data.frame("No_of_countries" = apply(vaccine_in_countries[-1], 2, function(c) sum(c!=0)))
+No_of_countries = cbind("Vaccine" = row.names(No_of_countries), No_of_countries) 
+No_of_countries
+```
+# 2.14 Of all the vaccines Astrazenica is being used in the most of the countries 131 to be precise, followed by Pfizer which is administered in 88 countries and then with a huge drop with moderna which is administered in 37 countries.
+```{r }
+# Plot of number of countries using these vaccines
+No_of_countries %>%
+ggplot(mapping = aes(x     = reorder(Vaccine, -No_of_countries), 
+                     y     = No_of_countries)) +
+geom_col() +
+labs(x      = "Vaccines", 
+     y      = "No. of Countries", 
+     title  = "Number of Countries using vaccine") +
+  
+geom_text(aes(label = No_of_countries), vjust = -0.5) +
+theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "None")
+```
+```{r }
+head(data)
+```
+# 2.13 Looking at the Vaccination status throughout the world
+```{r }
+world_data<- data[, c(1,2,length(data))] %>%
+              distinct() %>%
+              separate_rows(vaccines, sep=",")
+head(world_data)
+```
+# 2.14 Adding continent
+```{r }
+vaccine_country_continent = data %>%
+                            mutate("continent" = countrycode(sourcevar   = data[, "country"],
+                                                             origin      = "country.name",
+                                                             destination = "continent")
+               )
+```
+
+
+# 2.15 : Based on total vaccinations data, US and China are leading followed by India for the maximum number of total vaccinations. This could also be because of the high population in some countries.
+#This only tells about the absolute number of total vaccinations. However for better comparison between countries, scaled numbers based on population would have been better. However, I was unable to scale the data by dividing by population of the country as that was not available.
+```{r }
+vaccine_country_continent = vaccine_country_continent %>%
+    select ("country","total_vaccinations","continent") %>%
+    group_by(country) %>%
+    filter (total_vaccinations == max(total_vaccinations)) %>%
+    arrange(desc(total_vaccinations)) %>%
+    ungroup() %>%
+    slice_max(total_vaccinations, n = 10)
+
+top_cot_plot = ggplot (vaccine_country_continent, 
+                       mapping = aes(x = reorder(country, -total_vaccinations), 
+                                     y = total_vaccinations )) +
+geom_col() +
+scale_y_continuous(labels = scales::comma) +
+theme_classic() +
+  
+theme(axis.text   = element_text(size  = 13), 
+      plot.title  = element_text(size  = 22)) +
+  
+theme(axis.text.x = element_text(angle           = 30, 
+                                 hjust           = 1), 
+                                 legend.position = "None") +
+labs(x      = "",
+     y      = "Total Vaccinations", 
+     title  = "Top 10 total Vaccinated Countries")
+show(top_cot_plot)
+```
+# 2.16 Data on number of people vaccinated in each country
+```{r }
+
+ppl_vaccinated = data %>%
+        select ("country","people_vaccinated") %>%
+        group_by(country) %>%
+        filter (people_vaccinated == max(people_vaccinated)) %>%
+        filter (people_vaccinated != 0) %>%
+        ungroup() %>%
+        distinct() %>%
+        slice_max(people_vaccinated,n=10) %>%
+        arrange(desc(country))
+ppl_vaccinated
+```
+# 2.17 Data on number of people fully vaccinated in each country
+```{r }
+ppl_full_vaccinated = data %>%
+        select ("country","people_fully_vaccinated") %>%
+        group_by(country) %>%
+        filter (people_fully_vaccinated == max(people_fully_vaccinated)) %>%
+        filter (people_fully_vaccinated != 0) %>%
+        ungroup() %>%
+        distinct() %>%
+        slice_max(people_fully_vaccinated,n = 10)
+
+ppl_full_vaccinated
+```
+
+```{r }
+final_country =  unique(rbind(ppl_vaccinated[,"country"], ppl_full_vaccinated[,"country"]))
+final_country
+```
+
+```{r }
+dose_data = data %>%
+            filter (country %in% 
+            pull(final_country, country)) %>%
+            group_by(country)%>%
+            filter (total_vaccinations == max(total_vaccinations)) %>%
+            arrange(desc(total_vaccinations)) %>%
+            select ("country","people_vaccinated","people_fully_vaccinated") 
+
+dose_data
+
+```
+
+# 2.18  Transposing the data to make it longer
+```{r }
+
+dose_data = melt(dose_data[,c("country",
+                              "people_vaccinated",
+                              "people_fully_vaccinated")], 
+                 id.vars='country')
+head(dose_data)
+
+```
+# 2.19 It can be seen that US is leading in second dose vaccination. Other countries are still lagging behind.
+# India has a large number of people who have received the 1st dose however not many have received the 2nd dose.
+```{r }
+options(repr.plot.width = 15, repr.plot.height = 10)
+ggplot(dose_data, 
+       aes(x      = reorder(country,-value), 
+           y      = value, 
+           fill   = variable)) +
+geom_bar(stat     = 'identity', 
+         position = 'dodge', 
+         width    = 0.6) +
+scale_y_continuous(labels = scales::comma) +
+labs(x      = "",
+     y      = "Total Vaccinations", 
+     title  = "Vaccination counts in both dosages", 
+     fill   = element_blank()) +
+theme_bw() +
+theme(axis.text.x = element_text(angle = 30, 
+                                 hjust = 1)) +
+scale_fill_manual(values = c("#A4A4A4", "#FF9933"), 
+                  labels = c("1st Dosage", "2nd Dosage"))
+```
+
+
+
+# 2.20 : The below plot tells us the trend of both vaccination doses across the world. This is expected as 1st dose is leading and 2nd dose is catching up with the 1st dose.
+```{r }
+data$date = as.Date(data$date)
+
+    data %>%
+    select ("date","people_vaccinated","people_fully_vaccinated")%>%
+    group_by(date) %>%
+    summarise (people_vaccinated       = sum(people_vaccinated), 
+               people_fully_vaccinated = sum(people_fully_vaccinated)) %>%
+    ggplot() +
+      
+    geom_line(aes(x    = date, 
+                  y    = people_vaccinated, 
+                  col  = "1st Dosage"), 
+                  size = 1) +
+      
+    geom_line(aes(x    = date, 
+                  y    = people_fully_vaccinated, 
+                  col  = "2nd Dossage"), 
+                  size = 1) +
+      
+    scale_y_continuous(labels = scales::comma) +
+      
+    labs(x      = element_blank(), 
+         y      = "Vaccination count", 
+         title  = "Vaccination trend", 
+         col    = element_blank()) +
+      
+    theme_bw() +
+      
+    scale_color_manual(values = c('1st Dosage' = '#A4A4A4',
+                                  '2nd Dossage' = '#FF9933'))
+```
+
+
+# 2.21 This plot gives the daily vaccination trend broken up for top countries where it is highest. Based on this it can be seen that China, US and India have higher daily vaccinations compared to other countries.This could again be affected by the population. Please not I was unable to scale the data as population of the country was not available in this data. 
+```{r }
+options(warn=-1)
+top_vacc_countries =  data %>%
+select (country, daily_vaccinations) %>%
+group_by(country) %>%
+filter (daily_vaccinations == max(daily_vaccinations)) %>%
+distinct () %>%
+ungroup() %>%
+slice_max(daily_vaccinations, n = 10) %>%
+select(country)
+
+
+data %>%
+filter (country %in% 
+pull(top_vacc_countries, country) )%>%
+select (country, date, daily_vaccinations) %>%
+ggplot(mapping = aes(x = date, 
+                     y = daily_vaccinations)) +
+geom_line(size = 0.6, 
+          col = "#56B4E9") +
+  
+scale_y_continuous(labels = scales::comma) +
+facet_wrap(~country) +
+theme_gray() +
+labs(x      = element_blank(), 
+     y      = "Vaccination count", 
+     title  = "Daily Vaccination trend in top countries", 
+     col    = element_blank())
+```
+
+```{r }
+dose_1 = data%>%
+        select ("country","people_vaccinated_per_hundred") %>%
+        group_by (country) %>%
+        filter (people_vaccinated_per_hundred == max(people_vaccinated_per_hundred)) %>%
+        arrange(desc(people_vaccinated_per_hundred)) %>%
+        distinct() %>%
+        ungroup %>%
+        rename(region = country, 
+               value  = people_vaccinated_per_hundred) %>%
+        mutate(region = tolower(region)) %>%
+        mutate(region = recode(region, "united states"    = "united states of america",
+                                       "north macedonia"  = "macedonia",
+                                       "serbia"           = "republic of serbia"))
+
+dose_2 = data %>%
+        select ("country","people_fully_vaccinated_per_hundred") %>%
+        group_by (country) %>%
+        filter (people_fully_vaccinated_per_hundred == max(people_fully_vaccinated_per_hundred)) %>%
+        arrange(desc(people_fully_vaccinated_per_hundred)) %>%
+        distinct() %>%
+        ungroup %>%
+        rename(region = country, value = people_fully_vaccinated_per_hundred) %>%
+        mutate(region = tolower(region)) %>%
+        mutate(region = recode(region, "united states"     = "united states of america",
+                                       "north macedonia"  = "macedonia",
+                                       "serbia"           = "republic of serbia"))
+```
+# 2.22 Below is a plot to visualize the status of Dose 1 vaccinations on the map. Please note here the information is per 100 people.The darker the color, the more percentage of vaccinations. US and Canada show the highest dose1 vaccinations
+```{r }
+options(warn = -1)
+data(country.map, package = "choroplethrMaps")
+con_df = data.frame("region" = unique(country.map$region))
+ 
+country_choropleth(dose_1, num_colors = 9) +
+labs(title    = "Dose 1 (administered per 100 people)") +
+scale_fill_brewer(palette ="Purples")
+```
+
+# 2.23 Below is a plot to visualize the status of Dose 2 vaccinations on the map. Please note here the information is per 100 people.The darker the color, the more percentage of vaccinations. US shows the highest dose2 vaccinations. Note that on comparing this with the previous map, it can be seen that Canada had more Dose1 and much less Dose2, its easily seen due to the light color visualization.
+```{r }
+country_choropleth(dose_2, num_colors = 9) +
+labs(title    = "Dose 2 (administered per 100 people)") +
+scale_fill_brewer(palette = "Purples")
+```
+
+# 2.24 Below plot shows the vaccination trend per million people. It can be seen that US , UK and England are the highest.
+# India brazil and china are comparitively lower. Based on the plot, the trend for england and UK seem to be exactly same which is weird, I plan to investigate whether these are duplicate records.
+```{r }
+vacc_total =  data %>%
+              select ("country","total_vaccinations") %>%
+              group_by (country) %>%
+              filter (total_vaccinations == max(total_vaccinations)) %>%
+              distinct() %>%
+              ungroup() %>%
+              slice_max(total_vaccinations, n = 6)
+
+
+data %>%
+select ("date", "country", "daily_vaccinations_per_million") %>%
+filter (country %in% 
+                pull (vacc_total, country)) %>%
+group_by(country) %>%
+ggplot (mapping = aes(x = date, 
+                      y = daily_vaccinations_per_million)) +
+geom_line(aes(color = country), 
+              size  = 0.8) +
+ylab("Count per million") +
+ggtitle("Vaccination trends per million in Top countries") +
+theme_bw() 
+```
+
+
+
+
